@@ -87,6 +87,19 @@ export async function deleteOperation(id) {
   if (error) throw error;
 }
 
+/** เมื่องานถูกทำเครื่องหมายว่า "เสร็จสิ้น" ให้บันทึกลง Activity Log อัตโนมัติ */
+export async function logTaskAsOperation(farmId, task) {
+  const payload = {
+    farm_id: farmId,
+    operation_type: task.title,
+    description: task.description || null,
+    performed_by: task.assigned_to || null,
+    performed_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from("operations").insert(payload);
+  if (error) throw error;
+}
+
 // ---------- Harvest ----------
 export async function listHarvest(farmId, { limit = 100 } = {}) {
   const { data, error } = await supabase
@@ -119,6 +132,42 @@ export async function updateHarvest(id, patch) {
 export async function deleteHarvest(id) {
   const { error } = await supabase.from("harvest_records").delete().eq("id", id);
   if (error) throw error;
+}
+
+/** สร้าง/อัปเดต/ลบ transaction รายรับที่ผูกกับ harvest record โดยอัตโนมัติ
+ * เรียกหลัง addHarvest/updateHarvest ทุกครั้ง — ไม่ต้องกรอกรายรับซ้ำที่หน้าการเงิน */
+export async function syncHarvestTransaction(farmId, harvest) {
+  const amount = Number(harvest.weight_kg || 0) * Number(harvest.price_per_kg || 0);
+
+  const { data: existing } = await supabase
+    .from("transactions")
+    .select("id")
+    .eq("harvest_id", harvest.id)
+    .maybeSingle();
+
+  // ไม่มีราคา/กก. หรือยอดเป็น 0 -> ไม่ควรมีรายรับผูกอยู่ ลบตัวเดิมถ้ามี
+  if (!harvest.price_per_kg || amount <= 0) {
+    if (existing) await supabase.from("transactions").delete().eq("id", existing.id);
+    return;
+  }
+
+  const payload = {
+    farm_id: farmId,
+    transaction_type: "income",
+    category: "ขายผลผลิต",
+    amount,
+    transaction_date: harvest.harvest_date,
+    description: `ขายผลผลิต${harvest.grade ? " เกรด " + harvest.grade : ""} (${Number(harvest.weight_kg).toLocaleString()} กก.)`,
+    harvest_id: harvest.id,
+  };
+
+  if (existing) {
+    const { error } = await supabase.from("transactions").update(payload).eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("transactions").insert(payload);
+    if (error) throw error;
+  }
 }
 
 // ---------- Transactions (รายรับ-รายจ่าย) ----------
@@ -239,7 +288,22 @@ export async function deleteTask(id) {
   if (error) throw error;
 }
 
-// ---------- Farm Members (สำหรับ dropdown เลือกผู้ปฏิบัติงาน/ผู้บันทึก) ----------
+export async function inviteMember(farmId, email, role) {
+  const { data, error } = await supabase.rpc("invite_member_by_email", { p_farm_id: farmId, p_email: email, p_role: role });
+  if (error) throw error;
+  return data; // 'invited' | 'not_found' | 'forbidden'
+}
+
+export async function updateMemberRole(farmId, userId, role) {
+  const { error } = await supabase.from("farm_members").update({ farm_role: role }).eq("farm_id", farmId).eq("user_id", userId);
+  if (error) throw error;
+}
+
+export async function removeMember(farmId, userId) {
+  const { data, error } = await supabase.rpc("remove_farm_member", { p_farm_id: farmId, p_user_id: userId });
+  if (error) throw error;
+  return data; // 'removed' | 'forbidden' | 'last_admin'
+}
 export async function listFarmMembers(farmId) {
   const { data, error } = await supabase
     .from("farm_members")

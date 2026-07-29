@@ -4,7 +4,7 @@ import {
   AlertTriangle, TrendingUp, TrendingDown, Wallet, Leaf, Sprout, LogOut,
   Bell, Image as ImageIcon, Send, Trash2, Bot, Menu, CloudSun, Settings,
   LifeBuoy, LayoutGrid, CheckSquare, Square, Droplets, Wind, Sun, CalendarRange, Pencil,
-  Sunrise, Sunset, Thermometer, Eye
+  Sunrise, Sunset, Thermometer, Eye, MapPin, Camera, Download, Users, Filter
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -16,11 +16,11 @@ import {
   getDashboardKpis, listActiveAlerts,
   listTrees, addTree, updateTree, deleteTree,
   listOperations, addOperation, updateOperation, deleteOperation,
-  listHarvest, addHarvest, updateHarvest, deleteHarvest,
+  listHarvest, addHarvest, updateHarvest, deleteHarvest, syncHarvestTransaction,
   listSoilReadings, addSoilReading, updateSoilReading, deleteSoilReading,
   listTransactions, addTransaction, updateTransaction, deleteTransaction,
-  listTasks, addTask, updateTask, updateTaskStatus, deleteTask,
-  listFarmMembers,
+  listTasks, addTask, updateTask, updateTaskStatus, deleteTask, logTaskAsOperation,
+  listFarmMembers, inviteMember, updateMemberRole, removeMember,
   listPhotos, uploadPhoto, deletePhoto,
   askAI, listChatHistory,
   listNotifications, unreadNotificationCount, markNotificationRead,
@@ -213,6 +213,10 @@ const TOKENS = `
   label.dsf-label { font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-bottom: 4px; display: block; }
 
   /* ---------- Responsive ---------- */
+  html, body { overflow-x: hidden; max-width: 100%; }
+  .dsf-shell { overflow-x: hidden; }
+  .dsf-main { overflow-x: hidden; min-width: 0; }
+
   @media (max-width: 900px) {
     .dsf-sidebar { position: fixed; left: 0; transform: translateX(-100%); box-shadow: 8px 0 24px rgba(0,0,0,0.25); }
     .dsf-sidebar.open { transform: translateX(0); }
@@ -220,9 +224,18 @@ const TOKENS = `
     .dsf-hamburger { display: flex; }
     .dsf-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .dsf-two-col, .dsf-three-col { grid-template-columns: minmax(0, 1fr); }
+    .dsf-three-col > *[style*="span 2"] { grid-column: span 1 !important; }
     .dsf-search { display: none; }
     .dsf-btn-primary span.dsf-btn-label { display: none; }
     .dsf-filterbar-dates { margin-left: 0; width: 100%; }
+    .dsf-content { padding: 16px 14px 60px 14px; }
+    .dsf-topbar { padding: 0 12px; gap: 6px; }
+  }
+  @media (max-width: 480px) {
+    .dsf-btn-primary { padding: 9px 12px; }
+    .dsf-icon-btn { width: 34px; height: 34px; }
+    .dsf-kpi-grid { grid-template-columns: minmax(0, 1fr); }
+    .dsf-card { padding: 12px; }
   }
 `;
 
@@ -264,10 +277,22 @@ function calcAgeYears(plantedDate) {
   return Math.max(age, 0);
 }
 
+/** แสดงวันที่แบบ วัน-เดือน-ปี(2หลัก) เช่น 24-03-26 — ใช้ทุกที่ที่แสดงวันที่ในตาราง/กราฟ */
+function fmtDate(value) {
+  if (!value) return "-";
+  const d = new Date(value.length === 10 ? value + "T00:00:00" : value);
+  if (isNaN(d.getTime())) return String(value);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${dd}-${mm}-${yy}`;
+}
+
 const NAV_ITEMS = [
   { key: "dashboard", label: "ภาพรวม", icon: Home },
   { key: "trees", label: "สวน/ต้นไม้", icon: TreeDeciduous },
-  { key: "operations", label: "กิจกรรม", icon: ClipboardList },
+  { key: "tasks", label: "งานที่ต้องทำ", icon: CheckSquare },
+  { key: "operations", label: "บันทึกกิจกรรม", icon: ClipboardList },
   { key: "harvest", label: "ผลผลิต", icon: Sprout },
   { key: "finance", label: "การเงิน", icon: Wallet },
   { key: "soil", label: "ดิน", icon: FlaskConical },
@@ -483,7 +508,7 @@ function SoilDualAxisChart({ soil, height = 220 }) {
     .sort((a, b) => a.reading_date.localeCompare(b.reading_date))
     .slice(-7)
     .map(s => ({
-      d: s.reading_date.slice(5),
+      d: fmtDate(s.reading_date),
       ph: s.ph, om: s.om, ec: s.ec,
       p: s.p, k: s.k, ca: s.ca, mg: s.mg,
     }));
@@ -495,11 +520,13 @@ function SoilDualAxisChart({ soil, height = 220 }) {
   return (
     <div style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={trend} margin={{ left: 4, right: 4 }}>
+        <LineChart data={trend} margin={{ left: 4, right: 4, top: 4, bottom: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis dataKey="d" tick={{ fontSize: 10, fill: "var(--ink-soft)" }} axisLine={false} tickLine={false} />
-          <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "var(--ink-soft)" }} axisLine={false} tickLine={false} width={26} />
-          <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "var(--ink-soft)" }} axisLine={false} tickLine={false} width={30} />
+          <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "var(--ink-soft)" }} axisLine={false} tickLine={false} width={30}
+                 label={{ value: "pH/OM/EC", angle: -90, position: "insideLeft", fontSize: 10, fill: "var(--ink-soft)" }} />
+          <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "var(--ink-soft)" }} axisLine={false} tickLine={false} width={34}
+                 label={{ value: "P/K/Ca/Mg", angle: 90, position: "insideRight", fontSize: 10, fill: "var(--ink-soft)" }} />
           <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
           <Legend wrapperStyle={{ fontSize: 10.5 }} />
           <Line yAxisId="left" type="monotone" dataKey="ph" name="pH" stroke="var(--blue)" strokeWidth={2} dot={{ r: 2.5 }} />
@@ -518,15 +545,17 @@ function SoilDualAxisChart({ soil, height = 220 }) {
 function SoilTrendWidget({ soil }) {
   return (
     <div className="dsf-card">
-      <div className="dsf-card-title" style={{ marginBottom: 4 }}>แนวโน้มดิน (7 ครั้งล่าสุด)</div>
+      <div className="dsf-card-title" style={{ marginBottom: 4 }}>แนวโน้มค่าวิเคราะห์ดิน</div>
       <SoilDualAxisChart soil={soil} height={190} />
     </div>
   );
 }
 
 const DONUT_COLORS = ["#2BA8A2", "#5DADE2", "#FFD23F", "#EF6C4A", "#1E8C86", "#3CC4BD", "#E6B800", "#D45233"];
+const INCOME_DONUT_COLORS = ["#1E9E5A", "#27AE60", "#4FD188", "#2BA8A2", "#3CC4BD", "#7FE0B4"];
+const EXPENSE_DONUT_COLORS = ["#EF6C4A", "#D45233", "#FF8A6A", "#E6B800", "#C0392B", "#F4A261"];
 
-function DonutCard({ title, data, emptyLabel = "ยังไม่มีข้อมูล" }) {
+function DonutCard({ title, data, emptyLabel = "ยังไม่มีข้อมูล", colors = DONUT_COLORS }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   return (
     <div className="dsf-card">
@@ -538,7 +567,7 @@ function DonutCard({ title, data, emptyLabel = "ยังไม่มีข้�
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie data={data} dataKey="value" nameKey="name" innerRadius={42} outerRadius={64} paddingAngle={2}>
-                {data.map((entry, i) => <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />)}
+                {data.map((entry, i) => <Cell key={i} fill={colors[i % colors.length]} />)}
               </Pie>
               <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v) => `฿${Number(v).toLocaleString()}`} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -560,12 +589,67 @@ function IncomeExpenseDonuts({ transactions }) {
   };
   return (
     <div className="dsf-two-col">
-      <DonutCard title="สัดส่วนรายรับ" data={byCategory("income")} emptyLabel="ยังไม่มีรายรับในช่วงนี้" />
-      <DonutCard title="สัดส่วนรายจ่าย" data={byCategory("expense")} emptyLabel="ยังไม่มีรายจ่ายในช่วงนี้" />
+      <DonutCard title="สัดส่วนรายรับ" data={byCategory("income")} emptyLabel="ยังไม่มีรายรับในช่วงนี้" colors={INCOME_DONUT_COLORS} />
+      <DonutCard title="สัดส่วนรายจ่าย" data={byCategory("expense")} emptyLabel="ยังไม่มีรายจ่ายในช่วงนี้" colors={EXPENSE_DONUT_COLORS} />
     </div>
   );
 }
 
+
+/* ============================================================
+   EXPORT — CSV และ PDF (ผ่านหน้าต่างพิมพ์ของเบราว์เซอร์ เลือก "บันทึกเป็น PDF")
+   ใช้ข้อมูลดิบทุกคอลัมน์ของแถว ไม่ใช่แค่ที่แสดงในตาราง (ครบถ้วนกว่าสำหรับเอาไปใช้ต่อ)
+   ============================================================ */
+function flattenExportValue(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    if (v.tree_code) return v.tree_code;
+    try { return JSON.stringify(v); } catch { return String(v); }
+  }
+  return v;
+}
+
+function exportRowsToCSV(filename, rows) {
+  if (!rows.length) { window.alert("ไม่มีข้อมูลให้ export"); return; }
+  const headers = Object.keys(rows[0]);
+  const lines = [headers.join(",")];
+  rows.forEach(r => {
+    lines.push(headers.map(h => `"${String(flattenExportValue(r[h])).replace(/"/g, '""')}"`).join(","));
+  });
+  const csv = "\uFEFF" + lines.join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportRowsToPDF(title, rows) {
+  if (!rows.length) { window.alert("ไม่มีข้อมูลให้ export"); return; }
+  const headers = Object.keys(rows[0]);
+  const headHtml = headers.map(h => `<th>${h}</th>`).join("");
+  const bodyHtml = rows.map(r => `<tr>${headers.map(h => `<td>${flattenExportValue(r[h])}</td>`).join("")}</tr>`).join("");
+  const win = window.open("", "_blank");
+  if (!win) { window.alert("เบราว์เซอร์บล็อกป๊อปอัป กรุณาอนุญาตแล้วลองใหม่"); return; }
+  win.document.write(`
+    <html><head><title>${title}</title>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: 'Noto Sans Thai', sans-serif; padding: 24px; }
+      h2 { margin-bottom: 14px; }
+      table { width: 100%; border-collapse: collapse; font-size: 11px; }
+      th, td { border: 1px solid #ccc; padding: 5px 7px; text-align: left; white-space: nowrap; }
+      th { background: #f0f0f0; }
+    </style></head>
+    <body>
+      <h2>${title}</h2>
+      <table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>
+      <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+    </body></html>
+  `);
+  win.document.close();
+}
 
 function ListTable({ title, rows, columns, maxVisibleRows = 10, onAdd, addLabel = "เพิ่มรายการ", searchPlaceholder = "ค้นหา...", searchFn, onEdit, onDelete, extraHeader }) {
   const [q, setQ] = useState("");
@@ -577,8 +661,16 @@ function ListTable({ title, rows, columns, maxVisibleRows = 10, onAdd, addLabel 
     <div className="dsf-card">
       <div className="dsf-card-head">
         <div className="dsf-card-title">{title} <span className="muted">({filtered.length})</span></div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {extraHeader}
+          <button className="dsf-icon-btn" style={{ width: "auto", padding: "0 10px" }} title="Export CSV"
+                  onClick={() => exportRowsToCSV(`${title}.csv`, filtered)}>
+            <Download size={13} /> <span style={{ fontSize: 11.5, marginLeft: 4 }}>CSV</span>
+          </button>
+          <button className="dsf-icon-btn" style={{ width: "auto", padding: "0 10px" }} title="Export PDF (พิมพ์)"
+                  onClick={() => exportRowsToPDF(title, filtered)}>
+            <Download size={13} /> <span style={{ fontSize: 11.5, marginLeft: 4 }}>PDF</span>
+          </button>
           {onAdd && <button className="dsf-btn-primary-sm" onClick={onAdd}><Plus size={13} /> {addLabel}</button>}
         </div>
       </div>
@@ -700,31 +792,39 @@ function NotificationsPanel({ notifications, onMarkRead, onMarkAllRead }) {
   );
 }
 
-function DateRangePresetsInline({ range, onChange }) {
-  const [customOpen, setCustomOpen] = useState(false);
+function DateFilterButton({ range, onChange }) {
+  const [open, setOpen] = useState(false);
+  const activeLabel = DATE_PRESETS.find(p => p.key === range.preset)?.label
+    || (range.preset === "custom" ? "กำหนดเอง" : "ทั้งหมด");
 
   function selectPreset(key) {
     onChange({ preset: key, ...presetToRange(key) });
-    setCustomOpen(false);
+    setOpen(false);
   }
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, position: "relative" }}>
-      {DATE_PRESETS.map(p => (
-        <button key={p.key} className={`dsf-preset-btn ${range.preset === p.key ? "active" : ""}`} onClick={() => selectPreset(p.key)}>
-          {p.label}
-        </button>
-      ))}
-      <button className={`dsf-icon-btn ${range.preset === "custom" ? "active" : ""}`} style={{ width: 32, height: 32 }} onClick={() => setCustomOpen(o => !o)} title="กำหนดช่วงวันที่เอง">
-        <CalendarRange size={14} />
+    <div style={{ position: "relative", flexShrink: 0 }}>
+      <button className="dsf-icon-btn" style={{ width: "auto", padding: "0 12px", gap: 6, display: "flex", alignItems: "center" }} onClick={() => setOpen(o => !o)}>
+        <CalendarRange size={15} />
+        <span style={{ fontSize: 12.5, fontWeight: 600 }}>{activeLabel}</span>
       </button>
-      {customOpen && (
+      {open && (
         <>
-          <div style={{ position: "fixed", inset: 0, zIndex: 25 }} onClick={() => setCustomOpen(false)} />
-          <div style={{ position: "absolute", top: 42, left: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 12, boxShadow: "var(--shadow-md)", zIndex: 30, display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="date" value={range.start || ""} onChange={e => onChange({ preset: "custom", start: e.target.value, end: range.end })} />
-            <span className="muted">ถึง</span>
-            <input type="date" value={range.end || ""} onChange={e => onChange({ preset: "custom", start: range.start, end: e.target.value })} />
+          <div style={{ position: "fixed", inset: 0, zIndex: 25 }} onClick={() => setOpen(false)} />
+          <div style={{ position: "absolute", top: 44, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 12, boxShadow: "var(--shadow-md)", zIndex: 30, width: 260 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
+              {DATE_PRESETS.map(p => (
+                <button key={p.key} className={`dsf-preset-btn ${range.preset === p.key ? "active" : ""}`} onClick={() => selectPreset(p.key)}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="muted" style={{ marginBottom: 4 }}>กำหนดช่วงเอง</div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="date" style={{ flex: 1, minWidth: 0 }} value={range.start || ""} onChange={e => onChange({ preset: "custom", start: e.target.value, end: range.end })} />
+              <span className="muted">ถึง</span>
+              <input type="date" style={{ flex: 1, minWidth: 0 }} value={range.end || ""} onChange={e => onChange({ preset: "custom", start: range.start, end: e.target.value })} />
+            </div>
           </div>
         </>
       )}
@@ -741,13 +841,13 @@ function Topbar({ onMenuClick, onQuickAdd, unread, notifOpen, setNotifOpen, noti
           <Search size={14} />
           <input placeholder="ค้นหา..." />
         </div>
-        {showDateFilter && <DateRangePresetsInline range={dateRange} onChange={onDateRangeChange} />}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        {showDateFilter && <DateFilterButton range={dateRange} onChange={onDateRangeChange} />}
         <button className="dsf-btn-primary" onClick={onQuickAdd}>
           <Plus size={15} /> <span className="dsf-btn-label">เพิ่มข้อมูล</span>
         </button>
-        <div style={{ position: "relative" }}>
+        <div style={{ position: "relative", flexShrink: 0 }}>
           <button className="dsf-icon-btn" onClick={() => setNotifOpen(o => !o)}>
             <Bell size={16} />
             {unread > 0 && <span className="dsf-badge">{unread}</span>}
@@ -759,7 +859,7 @@ function Topbar({ onMenuClick, onQuickAdd, unread, notifOpen, setNotifOpen, noti
             </>
           )}
         </div>
-        <button className="dsf-icon-btn" onClick={onSignOut} title="ออกจากระบบ"><LogOut size={16} /></button>
+        <button className="dsf-icon-btn" onClick={onSignOut} title="ออกจากระบบ" style={{ flexShrink: 0 }}><LogOut size={16} /></button>
       </div>
     </div>
   );
@@ -838,7 +938,7 @@ function DailyChecklist({ tasks, members, onToggle, onOpenQuick, onEdit, onDelet
                 <div style={{ fontSize: 13, fontWeight: 600, textDecoration: isDone ? "line-through" : "none", color: isDone ? "var(--ink-soft)" : "var(--ink)" }}>{t.title}</div>
                 {t.description && <div className="muted">{t.description}</div>}
                 <div style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center", flexWrap: "wrap" }}>
-                  {t.due_date && <span className="muted">กำหนด {t.due_date}</span>}
+                  {t.due_date && <span className="muted">กำหนด {fmtDate(t.due_date)}</span>}
                   <PriorityChip priority={t.priority} />
                   <TaskStatusChip status={t.status} />
                   {t.assigned_to && <span className="muted">มอบหมาย: {memberName(members, t.assigned_to)}</span>}
@@ -889,8 +989,8 @@ function ActiveAlertsCard({ alerts }) {
   );
 }
 
-function DashboardView({ data, dateRange, farm, onOpenQuick, onEditTask, onDeleteTask }) {
-  const { kpis, alerts, harvest, soil, transactions, tasks, members, loading, refresh } = data;
+function DashboardView({ data, dateRange, farm, onOpenQuick, onToggleTask, onEditTask, onDeleteTask }) {
+  const { kpis, alerts, harvest, soil, transactions, tasks, members, loading } = data;
 
   const filteredHarvest = filterByDate(harvest, "harvest_date", dateRange);
   const filteredTransactions = filterByDate(transactions, "transaction_date", dateRange);
@@ -907,11 +1007,6 @@ function DashboardView({ data, dateRange, farm, onOpenQuick, onEditTask, onDelet
     { label: "ต้นที่ป่วย", value: kpis.sick_trees, unit: "ต้น", icon: Leaf, tone: "red" },
   ] : [];
 
-  async function handleToggle(task) {
-    await updateTaskStatus(task.id, task.status === TASK_STATUS_DONE ? "รอทำ" : TASK_STATUS_DONE);
-    refresh();
-  }
-
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div>
@@ -923,9 +1018,11 @@ function DashboardView({ data, dateRange, farm, onOpenQuick, onEditTask, onDelet
       </div>
 
       <div className="dsf-two-col">
-        <DailyChecklist tasks={tasks} members={members} onToggle={handleToggle} onOpenQuick={onOpenQuick} onEdit={onEditTask} onDelete={onDeleteTask} />
+        <DailyChecklist tasks={tasks} members={members} onToggle={onToggleTask} onOpenQuick={onOpenQuick} onEdit={onEditTask} onDelete={onDeleteTask} />
         <ActiveAlertsCard alerts={alerts} />
       </div>
+
+      <IncomeExpenseDonuts transactions={filteredTransactions} />
 
       <div className="dsf-three-col">
         <div className="dsf-card" style={{ gridColumn: "span 2" }}>
@@ -945,14 +1042,10 @@ function DashboardView({ data, dateRange, farm, onOpenQuick, onEditTask, onDelet
         <WeatherWidget farm={farm} />
       </div>
 
-      <div className="dsf-two-col">
-        <SoilTrendWidget soil={soil} />
-        <div className="dsf-card" style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-          <div className="muted">เลือกช่วงเวลาด้านบนเพื่อกรองข้อมูลทุกหน้าในสวนนี้ — โดนัทรายรับ/รายจ่ายอยู่ในหน้า "การเงิน" และแสดงซ้ำด้านล่างนี้ตามช่วงเวลาเดียวกัน</div>
-        </div>
+      <div className="dsf-card">
+        <div className="dsf-card-title" style={{ marginBottom: 4 }}>แนวโน้มค่าวิเคราะห์ดิน</div>
+        <SoilDualAxisChart soil={soil} height={280} />
       </div>
-
-      <IncomeExpenseDonuts transactions={filteredTransactions} />
     </div>
   );
 }
@@ -1010,7 +1103,7 @@ function TreesView({ trees, onOpenQuick, onEdit, onDelete }) {
         columns={[
           { key: "tree_code", label: "รหัส" },
           { key: "variety", label: "พันธุ์" },
-          { key: "planted_date", label: "วันที่ปลูก" },
+          { key: "planted_date", label: "วันที่ปลูก", render: t => fmtDate(t.planted_date) },
           { key: "age", label: "อายุ (ปี)", render: t => calcAgeYears(t.planted_date) ?? "-" },
           { key: "health_status", label: "สุขภาพ", render: t => <HealthChip health={t.health_status} /> },
           { key: "coords", label: "พิกัด", render: t => (t.latitude && t.longitude) ? `${Number(t.latitude).toFixed(4)}, ${Number(t.longitude).toFixed(4)}` : "-" },
@@ -1024,6 +1117,74 @@ function TreesView({ trees, onOpenQuick, onEdit, onDelete }) {
 /* ============================================================
    PAGE: OPERATIONS (Activity Log)
    ============================================================ */
+/* ============================================================
+   PAGE: TASKS (งานที่ต้องทำ)
+   ============================================================ */
+function TasksView({ tasks, members, onOpenQuick, onToggle, onEdit, onDelete }) {
+  const statusCounts = {};
+  tasks.forEach(t => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
+  const statusData = Object.entries(statusCounts).map(([name, value]) => ({ name, value }));
+  const total = tasks.length;
+  const done = tasks.filter(t => t.status === TASK_STATUS_DONE).length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <div className="dsf-two-col">
+        <div className="dsf-card">
+          <div className="dsf-card-title" style={{ marginBottom: 4 }}>สรุปสถานะงาน</div>
+          {tasks.length === 0 ? <div className="muted" style={{ padding: "24px 0", textAlign: "center" }}>ยังไม่มีงาน</div> : (
+            <div style={{ height: 170 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={42} outerRadius={64} paddingAngle={2}>
+                    {statusData.map((entry, i) => {
+                      const tone = TONE[TASK_STATUS_TONE[entry.name] || "blue"];
+                      return <Cell key={i} fill={tone.fg} />;
+                    })}
+                  </Pie>
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+        <div className="dsf-card" style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 8 }}>
+          <div className="dsf-card-title">ความคืบหน้ารวม</div>
+          <div className="num" style={{ fontSize: 30, fontWeight: 800, color: "var(--green)" }}>{pct}%</div>
+          <div className="dsf-progress-track"><div className="dsf-progress-fill" style={{ width: `${pct}%` }} /></div>
+          <div className="muted">{done}/{total} งานเสร็จแล้ว</div>
+        </div>
+      </div>
+
+      <ListTable
+        title="งานที่ต้องทำ"
+        rows={tasks}
+        onAdd={() => onOpenQuick("task")}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        addLabel="เพิ่มงาน"
+        searchFn={(t, q) => (t.title || "").toLowerCase().includes(q.toLowerCase())}
+        columns={[
+          { key: "toggle", label: "", render: t => (
+            <button onClick={() => onToggle(t)} style={{ background: "none", border: "none", cursor: "pointer", color: t.status === TASK_STATUS_DONE ? "var(--green)" : "var(--ink-soft)" }}>
+              {t.status === TASK_STATUS_DONE ? <CheckSquare size={16} /> : <Square size={16} />}
+            </button>
+          ) },
+          { key: "title", label: "ชื่องาน" },
+          { key: "description", label: "รายละเอียด" },
+          { key: "due_date", label: "กำหนดเสร็จ", render: t => fmtDate(t.due_date) },
+          { key: "priority", label: "ความสำคัญ", render: t => <PriorityChip priority={t.priority} /> },
+          { key: "status", label: "สถานะ", render: t => <TaskStatusChip status={t.status} /> },
+          { key: "assigned_to", label: "ผู้ปฏิบัติงาน", render: t => memberName(members, t.assigned_to) },
+          { key: "created_by", label: "ผู้กำหนดงาน", render: t => memberName(members, t.created_by) },
+        ]}
+      />
+    </div>
+  );
+}
+
 function OperationsView({ operations, dateRange, members, onOpenQuick, onEdit, onDelete }) {
   const rows = filterByDate(operations, "performed_at", dateRange);
   const typeCounts = {};
@@ -1058,7 +1219,7 @@ function OperationsView({ operations, dateRange, members, onOpenQuick, onEdit, o
         addLabel="บันทึกกิจกรรมใหม่"
         searchFn={(o, q) => (o.operation_type || "").toLowerCase().includes(q.toLowerCase())}
         columns={[
-          { key: "date", label: "วันที่", render: o => o.performed_at?.slice(0, 10) },
+          { key: "date", label: "วันที่", render: o => fmtDate(o.performed_at) },
           { key: "type", label: "ประเภท", render: o => (
             <span className="chip" style={{ background: "var(--green-soft)", color: "var(--green)" }}>{o.operation_type}</span>
           ) },
@@ -1104,7 +1265,7 @@ function HarvestView({ harvest, dateRange, members, onOpenQuick, onEdit, onDelet
         addLabel="บันทึกผลผลิต"
         searchFn={(h, q) => (h.grade || "").toLowerCase().includes(q.toLowerCase())}
         columns={[
-          { key: "harvest_date", label: "วันที่ขาย" },
+          { key: "harvest_date", label: "วันที่ขาย", render: h => fmtDate(h.harvest_date) },
           { key: "weight_kg", label: "น้ำหนัก (กก.)" },
           { key: "grade", label: "เกรด" },
           { key: "price_per_kg", label: "ราคา/กก.", render: h => h.price_per_kg ? `฿${Number(h.price_per_kg).toLocaleString()}` : "-" },
@@ -1133,7 +1294,7 @@ function FinanceView({ transactions, dateRange, members, onOpenQuick, onEdit, on
         addLabel="เพิ่มรายการ"
         searchFn={(t, q) => (t.category || "").toLowerCase().includes(q.toLowerCase())}
         columns={[
-          { key: "transaction_date", label: "วันที่" },
+          { key: "transaction_date", label: "วันที่", render: t => fmtDate(t.transaction_date) },
           { key: "type", label: "ประเภท", render: t => (
             <span className="chip" style={{ background: t.transaction_type === "income" ? "var(--green-soft)" : "var(--red-soft)", color: t.transaction_type === "income" ? "var(--green)" : "var(--red)" }}>
               {t.transaction_type === "income" ? "รายรับ" : "รายจ่าย"}
@@ -1160,7 +1321,7 @@ function SoilView({ soil, dateRange, members, onOpenQuick, onEdit, onDelete }) {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div className="dsf-card">
-        <div className="dsf-card-title" style={{ marginBottom: 4 }}>แนวโน้มดิน (7 ครั้งล่าสุด) — pH/OM/EC แกนซ้าย, P/K/Ca/Mg แกนขวา</div>
+        <div className="dsf-card-title" style={{ marginBottom: 4 }}>แนวโน้มค่าวิเคราะห์ดิน</div>
         <SoilDualAxisChart soil={rows} />
       </div>
       <ListTable
@@ -1171,7 +1332,7 @@ function SoilView({ soil, dateRange, members, onOpenQuick, onEdit, onDelete }) {
         onDelete={onDelete}
         addLabel="บันทึกผล"
         columns={[
-          { key: "reading_date", label: "วันที่" },
+          { key: "reading_date", label: "วันที่", render: s => fmtDate(s.reading_date) },
           { key: "ph", label: "pH" }, { key: "ec", label: "EC" }, { key: "om", label: "OM" },
           { key: "p", label: "P" }, { key: "k", label: "K" }, { key: "ca", label: "Ca" }, { key: "mg", label: "Mg" },
           { key: "notes", label: "หน่วยงาน" },
@@ -1357,13 +1518,43 @@ function WeatherView({ farm }) {
 /* ============================================================
    PAGE: PHOTOS
    ============================================================ */
+/** บีบอัด/ย่อขนาดรูปฝั่ง client ก่อนอัปโหลด (กว้างสุด 1600px, JPEG คุณภาพ 80%)
+ * ลดพื้นที่ Supabase Storage ที่ใช้ลงมาก โดยคุณภาพยังเพียงพอสำหรับดูในแอป */
+function compressImage(file, maxDim = 1600, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/")) { resolve(file); return; }
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) { height = Math.round((height * maxDim) / width); width = maxDim; }
+        else { width = Math.round((width * maxDim) / height); height = maxDim; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(blob => {
+        URL.revokeObjectURL(url);
+        if (!blob) { reject(new Error("บีบอัดรูปไม่สำเร็จ")); return; }
+        const newName = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+        resolve(new File([blob], newName, { type: "image/jpeg" }));
+      }, "image/jpeg", quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("อ่านไฟล์รูปไม่สำเร็จ")); };
+    img.src = url;
+  });
+}
+
 function PhotosView({ farmId }) {
   const [photos, setPhotos] = useState([]);
   const [category, setCategory] = useState("");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
-  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+  const galleryInputRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1377,9 +1568,17 @@ function PhotosView({ farmId }) {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true); setError("");
-    try { await uploadPhoto(farmId, file, { category: category || "other" }); await load(); }
+    try {
+      const compressed = await compressImage(file);
+      await uploadPhoto(farmId, compressed, { category: category || "other" });
+      await load();
+    }
     catch (err) { setError(err.message); }
-    finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
+    finally {
+      setUploading(false);
+      if (cameraInputRef.current) cameraInputRef.current.value = "";
+      if (galleryInputRef.current) galleryInputRef.current.value = "";
+    }
   }
 
   async function handleDelete(p) {
@@ -1387,14 +1586,35 @@ function PhotosView({ farmId }) {
     catch (e) { setError(e.message); }
   }
 
+  async function handleDownload(p) {
+    try {
+      const res = await fetch(p.url);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = p.storage_path?.split("/").pop() || "photo.jpg";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { setError("ดาวน์โหลดไม่สำเร็จ: " + e.message); }
+  }
+
   return (
     <div className="dsf-card">
       <div className="dsf-card-head">
         <div className="dsf-card-title">คลังภาพ ({photos.length})</div>
-        <label className="dsf-btn-primary-sm" style={{ cursor: "pointer" }}>
-          <Plus size={13} /> {uploading ? "กำลังอัปโหลด..." : "อัปโหลด"}
-          <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFile} disabled={uploading} style={{ display: "none" }} />
-        </label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <label className="dsf-btn-primary-sm" style={{ cursor: "pointer" }}>
+            <Camera size={13} /> {uploading ? "..." : "ถ่ายภาพ"}
+            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={handleFile} disabled={uploading} style={{ display: "none" }} />
+          </label>
+          <label className="dsf-btn-primary-sm" style={{ cursor: "pointer", background: "var(--blue)" }}>
+            <ImageIcon size={13} /> {uploading ? "..." : "เลือกจากคลังภาพ"}
+            <input ref={galleryInputRef} type="file" accept="image/*" onChange={handleFile} disabled={uploading} style={{ display: "none" }} />
+          </label>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
@@ -1414,9 +1634,14 @@ function PhotosView({ farmId }) {
           {photos.map(p => (
             <div key={p.id} style={{ position: "relative", aspectRatio: "1", borderRadius: 10, overflow: "hidden", background: "var(--surface-2)" }}>
               {p.url && <img src={p.url} alt={p.caption || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-              <button onClick={() => handleDelete(p)} style={{ position: "absolute", top: 4, right: 4, background: "rgba(0,0,0,0.5)", border: "none", borderRadius: 6, padding: 4, cursor: "pointer" }}>
-                <Trash2 size={12} color="#fff" />
-              </button>
+              <div style={{ position: "absolute", top: 4, right: 4, display: "flex", gap: 4 }}>
+                <button onClick={() => handleDownload(p)} title="ดาวน์โหลด" style={{ background: "rgba(0,0,0,0.5)", border: "none", borderRadius: 6, padding: 4, cursor: "pointer" }}>
+                  <Download size={12} color="#fff" />
+                </button>
+                <button onClick={() => handleDelete(p)} title="ลบ" style={{ background: "rgba(0,0,0,0.5)", border: "none", borderRadius: 6, padding: 4, cursor: "pointer" }}>
+                  <Trash2 size={12} color="#fff" />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -1485,17 +1710,114 @@ function AIChatView({ farmId }) {
 /* ============================================================
    PAGE: SETTINGS / SUPPORT
    ============================================================ */
-function SettingsView({ user, farms, farmId, onSignOut }) {
+function TeamManagementCard({ farmId, members, currentUserId, onChanged }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("worker");
+  const [inviting, setInviting] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const myRole = members.find(m => m.id === currentUserId)?.role;
+  const isAdmin = myRole === "admin";
+
+  const ROLE_LABEL = { admin: "ผู้ดูแล (Admin)", manager: "ผู้จัดการ (Manager)", worker: "ผู้ปฏิบัติงาน (Worker)" };
+
+  async function handleInvite() {
+    if (!email.trim()) return;
+    setInviting(true); setMsg("");
+    try {
+      const result = await inviteMember(farmId, email.trim(), role);
+      if (result === "invited") { setMsg("เพิ่มสมาชิกสำเร็จ"); setEmail(""); onChanged(); }
+      else if (result === "not_found") setMsg("ยังไม่พบบัญชีนี้ในระบบ — ให้คนที่จะเชิญสมัครสมาชิกในเว็บนี้ก่อน แล้วค่อยเชิญอีกครั้ง");
+      else if (result === "forbidden") setMsg("เฉพาะผู้ดูแล (Admin) เท่านั้นที่เชิญสมาชิกได้");
+    } catch (e) { setMsg("เกิดข้อผิดพลาด: " + e.message); }
+    finally { setInviting(false); }
+  }
+
+  async function handleRoleChange(memberId, newRole) {
+    try { await updateMemberRole(farmId, memberId, newRole); onChanged(); }
+    catch (e) { window.alert("เปลี่ยนสิทธิ์ไม่สำเร็จ: " + e.message); }
+  }
+
+  async function handleRemove(memberId) {
+    if (!window.confirm("ยืนยันนำสมาชิกคนนี้ออกจากสวน?")) return;
+    try {
+      const result = await removeMember(farmId, memberId);
+      if (result === "last_admin") window.alert("ลบไม่ได้ เพราะเป็น Admin คนสุดท้ายของสวนนี้");
+      else onChanged();
+    } catch (e) { window.alert("ลบไม่สำเร็จ: " + e.message); }
+  }
+
   return (
-    <div className="dsf-card" style={{ maxWidth: 480 }}>
-      <div className="dsf-card-title" style={{ marginBottom: 12 }}>ตั้งค่า</div>
-      <div style={{ display: "grid", gap: 10, fontSize: 13.5 }}>
-        <div><span className="muted">อีเมล</span><div>{user?.email}</div></div>
-        <div><span className="muted">สวนปัจจุบัน</span><div>{farms.find(f => f.id === farmId)?.name}</div></div>
+    <div className="dsf-card" style={{ maxWidth: 560, marginTop: 16 }}>
+      <div className="dsf-card-title" style={{ marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+        <Users size={16} /> ทีมงานในสวนนี้
       </div>
-      <button onClick={onSignOut} className="dsf-btn-primary-sm" style={{ marginTop: 16, background: "var(--red)" }}>
-        <LogOut size={13} /> ออกจากระบบ
-      </button>
+      <div className="muted" style={{ marginBottom: 12 }}>
+        Admin จัดการทุกอย่างได้ทั้งหมด · Manager แก้ไข/ลบข้อมูลได้ (ยกเว้นจัดการทีม) · Worker บันทึกข้อมูลหน้างานได้ แต่แก้ไข/ลบไม่ได้
+      </div>
+
+      <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
+        {members.map(m => (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--surface-2)", borderRadius: 10 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 999, background: "var(--green-soft)", color: "var(--green)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 12, flexShrink: 0 }}>
+              {m.name?.[0]?.toUpperCase() || "?"}
+            </div>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {m.name} {m.id === currentUserId && <span className="muted">(คุณ)</span>}
+            </div>
+            {isAdmin ? (
+              <>
+                <select className="dsf-input" style={{ width: 150 }} value={m.role} onChange={e => handleRoleChange(m.id, e.target.value)}>
+                  <option value="admin">Admin</option>
+                  <option value="manager">Manager</option>
+                  <option value="worker">Worker</option>
+                </select>
+                <button onClick={() => handleRemove(m.id)} title="นำออก" style={{ background: "var(--red-soft)", border: "none", borderRadius: 7, padding: 6, cursor: "pointer" }}>
+                  <X size={13} color="var(--red)" />
+                </button>
+              </>
+            ) : (
+              <span className="chip" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{ROLE_LABEL[m.role] || m.role}</span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {isAdmin ? (
+        <div style={{ borderTop: "1px dashed var(--border)", paddingTop: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>เชิญสมาชิกใหม่</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 140px auto", gap: 8 }}>
+            <input className="dsf-input" placeholder="อีเมลที่เคยสมัครสมาชิกไว้" value={email} onChange={e => setEmail(e.target.value)} />
+            <select className="dsf-input" value={role} onChange={e => setRole(e.target.value)}>
+              <option value="worker">Worker</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button disabled={inviting} onClick={handleInvite} className="dsf-btn-primary-sm">{inviting ? "..." : "เชิญ"}</button>
+          </div>
+          {msg && <div className="muted" style={{ marginTop: 8 }}>{msg}</div>}
+        </div>
+      ) : (
+        <div className="muted">เฉพาะ Admin เท่านั้นที่เชิญ/จัดการสิทธิ์สมาชิกได้</div>
+      )}
+    </div>
+  );
+}
+
+function SettingsView({ user, farms, farmId, members, onSignOut, onMembersChanged }) {
+  return (
+    <div>
+      <div className="dsf-card" style={{ maxWidth: 480 }}>
+        <div className="dsf-card-title" style={{ marginBottom: 12 }}>ตั้งค่า</div>
+        <div style={{ display: "grid", gap: 10, fontSize: 13.5 }}>
+          <div><span className="muted">อีเมล</span><div>{user?.email}</div></div>
+          <div><span className="muted">สวนปัจจุบัน</span><div>{farms.find(f => f.id === farmId)?.name}</div></div>
+        </div>
+        <button onClick={onSignOut} className="dsf-btn-primary-sm" style={{ marginTop: 16, background: "var(--red)" }}>
+          <LogOut size={13} /> ออกจากระบบ
+        </button>
+      </div>
+      <TeamManagementCard farmId={farmId} members={members} currentUserId={user?.id} onChanged={onMembersChanged} />
     </div>
   );
 }
@@ -1535,7 +1857,7 @@ function AddFarmModal({ onClose, onCreated }) {
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(30,42,32,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 16 }} onClick={onClose}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(30,42,32,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 16 }}>
       <div className="dsf" style={{ background: "var(--surface)", width: "100%", maxWidth: 380, borderRadius: 18, padding: 20 }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div className="disp" style={{ fontWeight: 700, fontSize: 16 }}>เพิ่มสวนใหม่</div>
@@ -1687,8 +2009,11 @@ function QuickActionModal({ mode, editRecord, farmId, trees, members, currentUse
         price_per_kg: hvPrice === "" ? null : Number(hvPrice),
         recorded_by: hvRecordedBy || null,
       };
-      if (isEdit) await updateHarvest(editRecord.id, payload);
-      else await addHarvest(farmId, payload);
+      let saved;
+      if (isEdit) saved = await updateHarvest(editRecord.id, payload);
+      else saved = await addHarvest(farmId, payload);
+      // สร้าง/อัปเดตรายรับในหน้าการเงินให้อัตโนมัติ ไม่ต้องกรอกซ้ำ
+      await syncHarvestTransaction(farmId, saved);
       onSaved();
     } catch (e) { setError(e.message); } finally { setSaving(false); }
   }
@@ -1701,8 +2026,14 @@ function QuickActionModal({ mode, editRecord, farmId, trees, members, currentUse
         title: taskTitle, description: taskDesc, due_date: taskDue || null, priority: taskPriority,
         status: taskStatus, assigned_to: taskAssignedTo || null, created_by: taskCreatedBy || null,
       };
+      const wasDone = editRecord?.status === TASK_STATUS_DONE;
+      const nowDone = taskStatus === TASK_STATUS_DONE;
       if (isEdit) await updateTask(editRecord.id, payload);
       else await addTask(farmId, payload);
+      // งานเพิ่งถูกทำเครื่องหมายว่าเสร็จสิ้น -> บันทึกลง Activity Log อัตโนมัติ
+      if (nowDone && !wasDone) {
+        await logTaskAsOperation(farmId, payload);
+      }
       onSaved();
     } catch (e) { setError(e.message); } finally { setSaving(false); }
   }
@@ -1727,7 +2058,7 @@ function QuickActionModal({ mode, editRecord, farmId, trees, members, currentUse
   const incomeCategoryOptions = ["ขายผลผลิต", ...FINANCE_CATEGORY_OPTIONS];
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(30,42,32,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 }} onClick={onClose}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(30,42,32,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 }}>
       <div className="dsf" style={{ background: "var(--surface)", width: "100%", maxWidth: 440, borderRadius: 18, padding: 20, maxHeight: "86vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
         {form === "menu" && (
           <>
@@ -1911,6 +2242,27 @@ function QuickActionModal({ mode, editRecord, farmId, trees, members, currentUse
 /* ============================================================
    ROOT
    ============================================================ */
+/* ============================================================
+   ERROR BOUNDARY — กันไม่ให้ error ในหน้าใดหน้าหนึ่งทำให้ทั้งแอปขึ้นจอขาว
+   ============================================================ */
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("Page error:", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="dsf-card" style={{ borderColor: "var(--red-soft)" }}>
+          <div style={{ fontWeight: 700, color: "var(--red)", marginBottom: 6 }}>เกิดข้อผิดพลาดในหน้านี้</div>
+          <div className="muted" style={{ marginBottom: 12 }}>{String(this.state.error?.message || this.state.error)}</div>
+          <button onClick={() => this.setState({ error: null })} className="dsf-btn-primary-sm">ลองใหม่</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function DurianDashboardContent() {
   const { user, farmId, farms, setFarmId, refreshFarms, signOut } = useAuth();
   const data = useFarmData(farmId);
@@ -1951,11 +2303,28 @@ function DurianDashboardContent() {
     catch (e) { window.alert("ลบไม่สำเร็จ: " + e.message); }
   }
 
+  async function handleToggleTask(task) {
+    const wasDone = task.status === TASK_STATUS_DONE;
+    const newStatus = wasDone ? "รอทำ" : TASK_STATUS_DONE;
+    try {
+      await updateTaskStatus(task.id, newStatus);
+      if (!wasDone) {
+        // เพิ่งทำเครื่องหมายว่าเสร็จสิ้น -> บันทึกลง Activity Log อัตโนมัติ
+        await logTaskAsOperation(farmId, task);
+      }
+      data.refresh();
+    } catch (e) { window.alert("อัปเดตสถานะไม่สำเร็จ: " + e.message); }
+  }
+
   let body;
   switch (page) {
     case "trees":
       body = <TreesView trees={data.trees} onOpenQuick={openAdd}
         onEdit={r => openEdit("tree", r)} onDelete={r => handleDelete(deleteTree, r, "ต้นทุเรียน")} />;
+      break;
+    case "tasks":
+      body = <TasksView tasks={data.tasks} members={members} onOpenQuick={openAdd} onToggle={handleToggleTask}
+        onEdit={r => openEdit("task", r)} onDelete={r => handleDelete(deleteTask, r, "งาน")} />;
       break;
     case "operations":
       body = <OperationsView operations={data.operations} dateRange={dateRange} members={members} onOpenQuick={openAdd}
@@ -1976,10 +2345,10 @@ function DurianDashboardContent() {
     case "weather": body = <WeatherView farm={currentFarm} />; break;
     case "aichat": body = <AIChatView farmId={farmId} />; break;
     case "photos": body = <PhotosView farmId={farmId} />; break;
-    case "settings": body = <SettingsView user={user} farms={farms} farmId={farmId} onSignOut={signOut} />; break;
+    case "settings": body = <SettingsView user={user} farms={farms} farmId={farmId} members={members} onSignOut={signOut} onMembersChanged={data.refresh} />; break;
     case "support": body = <SupportView />; break;
     default:
-      body = <DashboardView data={data} dateRange={dateRange} farm={currentFarm} onOpenQuick={openAdd}
+      body = <DashboardView data={data} dateRange={dateRange} farm={currentFarm} onOpenQuick={openAdd} onToggleTask={handleToggleTask}
         onEditTask={r => openEdit("task", r)} onDeleteTask={r => handleDelete(deleteTask, r, "งาน")} />;
   }
 
@@ -2010,7 +2379,7 @@ function DurianDashboardContent() {
                 โหลดข้อมูลไม่สำเร็จ: {data.error}
               </div>
             )}
-            {body}
+            <ErrorBoundary key={page}>{body}</ErrorBoundary>
           </div>
         </div>
       </div>
