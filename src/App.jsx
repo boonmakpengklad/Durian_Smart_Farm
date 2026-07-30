@@ -216,6 +216,12 @@ const TOKENS = `
   html, body { overflow-x: hidden; max-width: 100%; }
   .dsf-shell { overflow-x: hidden; }
   .dsf-main { overflow-x: hidden; min-width: 0; }
+  .dsf-card { max-width: 100%; }
+  .dsf-two-col > *, .dsf-three-col > * { min-width: 0; }
+  .dsf-span-2 { grid-column: span 2; }
+  .dsf-table { min-width: 640px; }
+  .dsf-filter-row th { padding: 3px 6px !important; }
+  .dsf-filter-row select { width: 100%; font-size: 10.5px; padding: 3px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--ink-soft); }
 
   @media (max-width: 900px) {
     .dsf-sidebar { position: fixed; left: 0; transform: translateX(-100%); box-shadow: 8px 0 24px rgba(0,0,0,0.25); }
@@ -224,7 +230,7 @@ const TOKENS = `
     .dsf-hamburger { display: flex; }
     .dsf-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .dsf-two-col, .dsf-three-col { grid-template-columns: minmax(0, 1fr); }
-    .dsf-three-col > *[style*="span 2"] { grid-column: span 1 !important; }
+    .dsf-span-2 { grid-column: span 1; }
     .dsf-search { display: none; }
     .dsf-btn-primary span.dsf-btn-label { display: none; }
     .dsf-filterbar-dates { margin-left: 0; width: 100%; }
@@ -653,9 +659,33 @@ function exportRowsToPDF(title, rows) {
 
 function ListTable({ title, rows, columns, maxVisibleRows = 10, onAdd, addLabel = "เพิ่มรายการ", searchPlaceholder = "ค้นหา...", searchFn, onEdit, onDelete, extraHeader }) {
   const [q, setQ] = useState("");
-  const filtered = searchFn && q ? rows.filter(r => searchFn(r, q)) : rows;
+  const [colFilters, setColFilters] = useState({});
+
+  function cellFilterValue(col, r) {
+    if (col.filterValue) return col.filterValue(r);
+    const v = r[col.key];
+    return v === null || v === undefined ? "" : String(v);
+  }
+
+  const bySearch = searchFn && q ? rows.filter(r => searchFn(r, q)) : rows;
+  const filtered = bySearch.filter(r => {
+    for (const col of columns) {
+      const active = colFilters[col.key];
+      if (!active) continue;
+      if (cellFilterValue(col, r) !== active) return false;
+    }
+    return true;
+  });
+
   const needsScroll = filtered.length > maxVisibleRows;
   const hasActions = !!(onEdit || onDelete);
+  const hasColumnFilters = columns.some(c => c.filterable !== false);
+
+  function uniqueValuesFor(col) {
+    const vals = new Set();
+    rows.forEach(r => { const v = cellFilterValue(col, r); if (v !== "") vals.add(v); });
+    return Array.from(vals).sort();
+  }
 
   return (
     <div className="dsf-card">
@@ -680,13 +710,33 @@ function ListTable({ title, rows, columns, maxVisibleRows = 10, onAdd, addLabel 
           <input placeholder={searchPlaceholder} value={q} onChange={e => setQ(e.target.value)} />
         </div>
       )}
-      <div className="dsf-table-wrap" style={needsScroll ? { maxHeight: maxVisibleRows * 42 + 38, overflowY: "auto" } : undefined}>
+      {Object.values(colFilters).some(Boolean) && (
+        <button onClick={() => setColFilters({})} className="chip" style={{ background: "var(--red-soft)", color: "var(--red)", border: "none", cursor: "pointer", marginBottom: 8 }}>
+          <X size={11} /> ล้างตัวกรองคอลัมน์
+        </button>
+      )}
+      <div className="dsf-table-wrap" style={needsScroll ? { maxHeight: maxVisibleRows * 42 + 68, overflowY: "auto" } : undefined}>
         <table className="dsf-table">
           <thead>
             <tr style={needsScroll ? { position: "sticky", top: 0, zIndex: 1 } : undefined}>
               {columns.map(c => <th key={c.key}>{c.label}</th>)}
               {hasActions && <th style={{ textAlign: "right" }}>จัดการ</th>}
             </tr>
+            {hasColumnFilters && (
+              <tr className="dsf-filter-row" style={needsScroll ? { position: "sticky", top: 32, zIndex: 1, background: "var(--surface)" } : undefined}>
+                {columns.map(c => (
+                  <th key={c.key}>
+                    {c.filterable !== false && (
+                      <select value={colFilters[c.key] || ""} onChange={e => setColFilters(f => ({ ...f, [c.key]: e.target.value }))}>
+                        <option value="">ทั้งหมด</option>
+                        {uniqueValuesFor(c).map(v => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    )}
+                  </th>
+                ))}
+                {hasActions && <th />}
+              </tr>
+            )}
           </thead>
           <tbody>
             {filtered.length === 0 && (
@@ -1025,7 +1075,7 @@ function DashboardView({ data, dateRange, farm, onOpenQuick, onToggleTask, onEdi
       <IncomeExpenseDonuts transactions={filteredTransactions} />
 
       <div className="dsf-three-col">
-        <div className="dsf-card" style={{ gridColumn: "span 2" }}>
+        <div className="dsf-card dsf-span-2">
           <div className="dsf-card-title" style={{ marginBottom: 4 }}>ผลผลิตรายเดือน (กก.)</div>
           <div style={{ height: 150 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -1106,8 +1156,8 @@ function TreesView({ trees, onOpenQuick, onEdit, onDelete }) {
           { key: "planted_date", label: "วันที่ปลูก", render: t => fmtDate(t.planted_date) },
           { key: "age", label: "อายุ (ปี)", render: t => calcAgeYears(t.planted_date) ?? "-" },
           { key: "health_status", label: "สุขภาพ", render: t => <HealthChip health={t.health_status} /> },
-          { key: "coords", label: "พิกัด", render: t => (t.latitude && t.longitude) ? `${Number(t.latitude).toFixed(4)}, ${Number(t.longitude).toFixed(4)}` : "-" },
-          { key: "notes", label: "หมายเหตุ" },
+          { filterable: false, key: "coords", label: "พิกัด", render: t => (t.latitude && t.longitude) ? `${Number(t.latitude).toFixed(4)}, ${Number(t.longitude).toFixed(4)}` : "-" },
+          { filterable: false, key: "notes", label: "หมายเหตุ" },
         ]}
       />
     </div>
@@ -1173,12 +1223,12 @@ function TasksView({ tasks, members, onOpenQuick, onToggle, onEdit, onDelete }) 
             </button>
           ) },
           { key: "title", label: "ชื่องาน" },
-          { key: "description", label: "รายละเอียด" },
+          { filterable: false, key: "description", label: "รายละเอียด" },
           { key: "due_date", label: "กำหนดเสร็จ", render: t => fmtDate(t.due_date) },
-          { key: "priority", label: "ความสำคัญ", render: t => <PriorityChip priority={t.priority} /> },
+          { key: "priority", label: "ความสำคัญ", render: t => <PriorityChip priority={t.priority} />, filterValue: t => PRIORITY_LABEL[t.priority] || t.priority },
           { key: "status", label: "สถานะ", render: t => <TaskStatusChip status={t.status} /> },
-          { key: "assigned_to", label: "ผู้ปฏิบัติงาน", render: t => memberName(members, t.assigned_to) },
-          { key: "created_by", label: "ผู้กำหนดงาน", render: t => memberName(members, t.created_by) },
+          { key: "assigned_to", label: "ผู้ปฏิบัติงาน", render: t => memberName(members, t.assigned_to), filterValue: t => memberName(members, t.assigned_to) },
+          { key: "created_by", label: "ผู้กำหนดงาน", render: t => memberName(members, t.created_by), filterValue: t => memberName(members, t.created_by) },
         ]}
       />
     </div>
@@ -1224,8 +1274,8 @@ function OperationsView({ operations, dateRange, members, onOpenQuick, onEdit, o
             <span className="chip" style={{ background: "var(--green-soft)", color: "var(--green)" }}>{o.operation_type}</span>
           ) },
           { key: "tree", label: "ต้น/แปลง", render: o => o.trees?.tree_code || "ทั้งสวน" },
-          { key: "performed_by", label: "ผู้ปฏิบัติงาน", render: o => memberName(members, o.performed_by) },
-          { key: "description", label: "หมายเหตุ" },
+          { key: "performed_by", label: "ผู้ปฏิบัติงาน", render: o => memberName(members, o.performed_by), filterValue: o => memberName(members, o.performed_by) },
+          { filterable: false, key: "description", label: "หมายเหตุ" },
         ]}
       />
     </div>
@@ -1266,11 +1316,11 @@ function HarvestView({ harvest, dateRange, members, onOpenQuick, onEdit, onDelet
         searchFn={(h, q) => (h.grade || "").toLowerCase().includes(q.toLowerCase())}
         columns={[
           { key: "harvest_date", label: "วันที่ขาย", render: h => fmtDate(h.harvest_date) },
-          { key: "weight_kg", label: "น้ำหนัก (กก.)" },
+          { filterable: false, key: "weight_kg", label: "น้ำหนัก (กก.)" },
           { key: "grade", label: "เกรด" },
-          { key: "price_per_kg", label: "ราคา/กก.", render: h => h.price_per_kg ? `฿${Number(h.price_per_kg).toLocaleString()}` : "-" },
-          { key: "total_amount", label: "รวม", render: h => h.total_amount ? `฿${Number(h.total_amount).toLocaleString()}` : "-" },
-          { key: "recorded_by", label: "ผู้บันทึก", render: h => memberName(members, h.recorded_by) },
+          { filterable: false, key: "price_per_kg", label: "ราคา/กก.", render: h => h.price_per_kg ? `฿${Number(h.price_per_kg).toLocaleString()}` : "-" },
+          { filterable: false, key: "total_amount", label: "รวม", render: h => h.total_amount ? `฿${Number(h.total_amount).toLocaleString()}` : "-" },
+          { key: "recorded_by", label: "ผู้บันทึก", render: h => memberName(members, h.recorded_by), filterValue: h => memberName(members, h.recorded_by) },
         ]}
       />
     </div>
@@ -1299,14 +1349,14 @@ function FinanceView({ transactions, dateRange, members, onOpenQuick, onEdit, on
             <span className="chip" style={{ background: t.transaction_type === "income" ? "var(--green-soft)" : "var(--red-soft)", color: t.transaction_type === "income" ? "var(--green)" : "var(--red)" }}>
               {t.transaction_type === "income" ? "รายรับ" : "รายจ่าย"}
             </span>
-          ) },
+          ), filterValue: t => t.transaction_type === "income" ? "รายรับ" : "รายจ่าย" },
           { key: "category", label: "หมวด" },
-          { key: "amount", label: "จำนวนเงิน", render: t => (
+          { filterable: false, key: "amount", label: "จำนวนเงิน", render: t => (
             <span className="num" style={{ fontWeight: 700, color: t.transaction_type === "income" ? "var(--green)" : "var(--red)" }}>
               {t.transaction_type === "income" ? "+" : "-"}฿{Number(t.amount).toLocaleString()}
             </span>
           ) },
-          { key: "description", label: "หมายเหตุ" },
+          { filterable: false, key: "description", label: "หมายเหตุ" },
         ]}
       />
     </div>
@@ -1336,7 +1386,7 @@ function SoilView({ soil, dateRange, members, onOpenQuick, onEdit, onDelete }) {
           { key: "ph", label: "pH" }, { key: "ec", label: "EC" }, { key: "om", label: "OM" },
           { key: "p", label: "P" }, { key: "k", label: "K" }, { key: "ca", label: "Ca" }, { key: "mg", label: "Mg" },
           { key: "notes", label: "หน่วยงาน" },
-          { key: "recorded_by", label: "ผู้บันทึก", render: s => memberName(members, s.recorded_by) },
+          { key: "recorded_by", label: "ผู้บันทึก", render: s => memberName(members, s.recorded_by), filterValue: s => memberName(members, s.recorded_by) },
         ]}
       />
     </div>
@@ -2013,7 +2063,13 @@ function QuickActionModal({ mode, editRecord, farmId, trees, members, currentUse
       if (isEdit) saved = await updateHarvest(editRecord.id, payload);
       else saved = await addHarvest(farmId, payload);
       // สร้าง/อัปเดตรายรับในหน้าการเงินให้อัตโนมัติ ไม่ต้องกรอกซ้ำ
-      await syncHarvestTransaction(farmId, saved);
+      // หมายเหตุ: Worker ไม่มีสิทธิ์เขียนตาราง transactions (ตาม RLS) — ถ้า sync ล้มเหลว
+      // ไม่ควรทำให้การบันทึกผลผลิตที่สำเร็จแล้วดูเหมือนล้มเหลวไปด้วย
+      try {
+        await syncHarvestTransaction(farmId, saved);
+      } catch (syncErr) {
+        console.warn("sync harvest -> transaction ไม่สำเร็จ (อาจเป็นเพราะสิทธิ์ผู้ใช้):", syncErr.message);
+      }
       onSaved();
     } catch (e) { setError(e.message); } finally { setSaving(false); }
   }
@@ -2278,6 +2334,10 @@ function DurianDashboardContent() {
 
   const currentFarm = farms.find(f => f.id === farmId);
   const members = data.members || [];
+  const myRole = members.find(m => m.id === user?.id)?.role;
+  const canEditDelete = myRole === "admin" || myRole === "manager"; // แก้ไขได้ (ทุกตาราง — ตรงกับ RLS *_update)
+  const canDeleteMost = myRole === "admin"; // trees/operations/harvest/soil/transactions ลบได้เฉพาะ admin ตาม RLS
+  const canDeleteTask = myRole === "admin" || myRole === "manager"; // tasks ลบได้ admin+manager ตาม RLS
 
   const loadNotifications = useCallback(async () => {
     const [list, count] = await Promise.all([listNotifications(), unreadNotificationCount()]);
@@ -2320,27 +2380,33 @@ function DurianDashboardContent() {
   switch (page) {
     case "trees":
       body = <TreesView trees={data.trees} onOpenQuick={openAdd}
-        onEdit={r => openEdit("tree", r)} onDelete={r => handleDelete(deleteTree, r, "ต้นทุเรียน")} />;
+        onEdit={canEditDelete ? r => openEdit("tree", r) : undefined}
+        onDelete={canDeleteMost ? r => handleDelete(deleteTree, r, "ต้นทุเรียน") : undefined} />;
       break;
     case "tasks":
       body = <TasksView tasks={data.tasks} members={members} onOpenQuick={openAdd} onToggle={handleToggleTask}
-        onEdit={r => openEdit("task", r)} onDelete={r => handleDelete(deleteTask, r, "งาน")} />;
+        onEdit={canEditDelete ? r => openEdit("task", r) : undefined}
+        onDelete={canDeleteTask ? r => handleDelete(deleteTask, r, "งาน") : undefined} />;
       break;
     case "operations":
       body = <OperationsView operations={data.operations} dateRange={dateRange} members={members} onOpenQuick={openAdd}
-        onEdit={r => openEdit("operation", r)} onDelete={r => handleDelete(deleteOperation, r, "กิจกรรม")} />;
+        onEdit={canEditDelete ? r => openEdit("operation", r) : undefined}
+        onDelete={canDeleteMost ? r => handleDelete(deleteOperation, r, "กิจกรรม") : undefined} />;
       break;
     case "harvest":
       body = <HarvestView harvest={data.harvest} dateRange={dateRange} members={members} onOpenQuick={openAdd}
-        onEdit={r => openEdit("harvest", r)} onDelete={r => handleDelete(deleteHarvest, r, "ผลผลิต")} />;
+        onEdit={canEditDelete ? r => openEdit("harvest", r) : undefined}
+        onDelete={canDeleteMost ? r => handleDelete(deleteHarvest, r, "ผลผลิต") : undefined} />;
       break;
     case "finance":
       body = <FinanceView transactions={data.transactions} dateRange={dateRange} members={members} onOpenQuick={openAdd}
-        onEdit={r => openEdit("expense", r)} onDelete={r => handleDelete(deleteTransaction, r, "รายการ")} />;
+        onEdit={canEditDelete ? r => openEdit("expense", r) : undefined}
+        onDelete={canDeleteMost ? r => handleDelete(deleteTransaction, r, "รายการ") : undefined} />;
       break;
     case "soil":
       body = <SoilView soil={data.soil} dateRange={dateRange} members={members} onOpenQuick={openAdd}
-        onEdit={r => openEdit("soil", r)} onDelete={r => handleDelete(deleteSoilReading, r, "ผลวิเคราะห์ดิน")} />;
+        onEdit={canEditDelete ? r => openEdit("soil", r) : undefined}
+        onDelete={canDeleteMost ? r => handleDelete(deleteSoilReading, r, "ผลวิเคราะห์ดิน") : undefined} />;
       break;
     case "weather": body = <WeatherView farm={currentFarm} />; break;
     case "aichat": body = <AIChatView farmId={farmId} />; break;
@@ -2349,7 +2415,8 @@ function DurianDashboardContent() {
     case "support": body = <SupportView />; break;
     default:
       body = <DashboardView data={data} dateRange={dateRange} farm={currentFarm} onOpenQuick={openAdd} onToggleTask={handleToggleTask}
-        onEditTask={r => openEdit("task", r)} onDeleteTask={r => handleDelete(deleteTask, r, "งาน")} />;
+        onEditTask={canEditDelete ? r => openEdit("task", r) : undefined}
+        onDeleteTask={canDeleteTask ? r => handleDelete(deleteTask, r, "งาน") : undefined} />;
   }
 
   return (
