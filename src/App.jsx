@@ -35,6 +35,17 @@ import {
    ลายเซ็น: เส้น "spike rule" หยักใต้หัวข้อหลัก (อ้างอิงหนามทุเรียน) ใช้แต่พอดี
    ============================================================ */
 const TOKENS = `
+  /* ล้างค่า default ที่ Vite ใส่มาให้ #root (max-width 1280px + padding + text-align center)
+     ซึ่งเป็นสาเหตุที่แอปไม่ขยายเต็มจอ และทำให้เกิดพื้นที่ขาวซ้าย-ขวาบนจอกว้าง
+     รวมถึงคำนวณ overflow ผิดพลาดบนมือถือแนวตั้ง */
+  #root {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    text-align: left !important;
+    width: 100%;
+  }
+  body { margin: 0; }
   @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@500;600;700&family=Noto+Sans+Thai:wght@400;500;600&display=swap');
 
   .dsf, .dsf *, .dsf *::before, .dsf *::after { box-sizing: border-box; }
@@ -615,12 +626,20 @@ function flattenExportValue(v) {
   return v;
 }
 
-function exportRowsToCSV(filename, rows) {
+/** ค่าที่จะ export ต่อคอลัมน์ — ใช้ filterValue ถ้ามี (แปลง UUID เป็นชื่อคน/ข้อความอ่านง่ายแล้ว)
+ * ไม่งั้น fallback ไปที่ค่าดิบของ field นั้น */
+function exportCellValue(col, r) {
+  if (col.exportValue) return col.exportValue(r);
+  if (col.filterValue) return col.filterValue(r);
+  return flattenExportValue(r[col.key]);
+}
+
+function exportRowsToCSV(filename, columns, rows) {
   if (!rows.length) { window.alert("ไม่มีข้อมูลให้ export"); return; }
-  const headers = Object.keys(rows[0]);
+  const headers = columns.map(c => c.label || c.key);
   const lines = [headers.join(",")];
   rows.forEach(r => {
-    lines.push(headers.map(h => `"${String(flattenExportValue(r[h])).replace(/"/g, '""')}"`).join(","));
+    lines.push(columns.map(c => `"${String(exportCellValue(c, r)).replace(/"/g, '""')}"`).join(","));
   });
   const csv = "\uFEFF" + lines.join("\r\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -631,11 +650,10 @@ function exportRowsToCSV(filename, rows) {
   URL.revokeObjectURL(url);
 }
 
-function exportRowsToPDF(title, rows) {
+function exportRowsToPDF(title, columns, rows) {
   if (!rows.length) { window.alert("ไม่มีข้อมูลให้ export"); return; }
-  const headers = Object.keys(rows[0]);
-  const headHtml = headers.map(h => `<th>${h}</th>`).join("");
-  const bodyHtml = rows.map(r => `<tr>${headers.map(h => `<td>${flattenExportValue(r[h])}</td>`).join("")}</tr>`).join("");
+  const headHtml = columns.map(c => `<th>${c.label || c.key}</th>`).join("");
+  const bodyHtml = rows.map(r => `<tr>${columns.map(c => `<td>${exportCellValue(c, r)}</td>`).join("")}</tr>`).join("");
   const win = window.open("", "_blank");
   if (!win) { window.alert("เบราว์เซอร์บล็อกป๊อปอัป กรุณาอนุญาตแล้วลองใหม่"); return; }
   win.document.write(`
@@ -694,11 +712,11 @@ function ListTable({ title, rows, columns, maxVisibleRows = 10, onAdd, addLabel 
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {extraHeader}
           <button className="dsf-icon-btn" style={{ width: "auto", padding: "0 10px" }} title="Export CSV"
-                  onClick={() => exportRowsToCSV(`${title}.csv`, filtered)}>
+                  onClick={() => exportRowsToCSV(`${title}.csv`, columns, filtered)}>
             <Download size={13} /> <span style={{ fontSize: 11.5, marginLeft: 4 }}>CSV</span>
           </button>
           <button className="dsf-icon-btn" style={{ width: "auto", padding: "0 10px" }} title="Export PDF (พิมพ์)"
-                  onClick={() => exportRowsToPDF(title, filtered)}>
+                  onClick={() => exportRowsToPDF(title, columns, filtered)}>
             <Download size={13} /> <span style={{ fontSize: 11.5, marginLeft: 4 }}>PDF</span>
           </button>
           {onAdd && <button className="dsf-btn-primary-sm" onClick={onAdd}><Plus size={13} /> {addLabel}</button>}
@@ -772,7 +790,8 @@ function ListTable({ title, rows, columns, maxVisibleRows = 10, onAdd, addLabel 
 /* ============================================================
    SIDEBAR / TOPBAR
    ============================================================ */
-function Sidebar({ page, onNavigate, open, onClose, farms, farmId, onFarmChange, onAddFarm, userEmail }) {
+function Sidebar({ page, onNavigate, open, onClose, farms, farmId, onFarmChange, onAddFarm, userEmail, myRole }) {
+  const visibleNavItems = NAV_ITEMS.filter(n => n.key !== "finance" || myRole !== "worker");
   return (
     <>
       <div className={`dsf-sidebar-overlay ${open ? "open" : ""}`} onClick={onClose} />
@@ -791,7 +810,7 @@ function Sidebar({ page, onNavigate, open, onClose, farms, farmId, onFarmChange,
         </div>
 
         <nav className="dsf-nav">
-          {NAV_ITEMS.map(n => {
+          {visibleNavItems.map(n => {
             const Icon = n.icon;
             return (
               <button key={n.key} className={`dsf-nav-item ${page === n.key ? "active" : ""}`} onClick={() => onNavigate(n.key)}>
@@ -994,14 +1013,20 @@ function DailyChecklist({ tasks, members, onToggle, onOpenQuick, onEdit, onDelet
                   {t.assigned_to && <span className="muted">มอบหมาย: {memberName(members, t.assigned_to)}</span>}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                <button onClick={() => onEdit(t)} title="แก้ไข" style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 7, padding: 4, cursor: "pointer" }}>
-                  <Pencil size={11} color="var(--ink-soft)" />
-                </button>
-                <button onClick={() => onDelete(t)} title="ลบ" style={{ background: "var(--red-soft)", border: "1px solid var(--red-soft)", borderRadius: 7, padding: 4, cursor: "pointer" }}>
-                  <Trash2 size={11} color="var(--red)" />
-                </button>
-              </div>
+              {(onEdit || onDelete) && (
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  {onEdit && (
+                    <button onClick={() => onEdit(t)} title="แก้ไข" style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 7, padding: 4, cursor: "pointer" }}>
+                      <Pencil size={11} color="var(--ink-soft)" />
+                    </button>
+                  )}
+                  {onDelete && (
+                    <button onClick={() => onDelete(t)} title="ลบ" style={{ background: "var(--red-soft)", border: "1px solid var(--red-soft)", borderRadius: 7, padding: 4, cursor: "pointer" }}>
+                      <Trash2 size={11} color="var(--red)" />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -1153,7 +1178,7 @@ function TreesView({ trees, onOpenQuick, onEdit, onDelete }) {
         columns={[
           { key: "tree_code", label: "รหัส" },
           { key: "variety", label: "พันธุ์" },
-          { key: "planted_date", label: "วันที่ปลูก", render: t => fmtDate(t.planted_date) },
+          { key: "planted_date", label: "วันที่ปลูก", render: t => fmtDate(t.planted_date), filterValue: t => fmtDate(t.planted_date) },
           { key: "age", label: "อายุ (ปี)", render: t => calcAgeYears(t.planted_date) ?? "-" },
           { key: "health_status", label: "สุขภาพ", render: t => <HealthChip health={t.health_status} /> },
           { filterable: false, key: "coords", label: "พิกัด", render: t => (t.latitude && t.longitude) ? `${Number(t.latitude).toFixed(4)}, ${Number(t.longitude).toFixed(4)}` : "-" },
@@ -1224,7 +1249,7 @@ function TasksView({ tasks, members, onOpenQuick, onToggle, onEdit, onDelete }) 
           ) },
           { key: "title", label: "ชื่องาน" },
           { filterable: false, key: "description", label: "รายละเอียด" },
-          { key: "due_date", label: "กำหนดเสร็จ", render: t => fmtDate(t.due_date) },
+          { key: "due_date", label: "กำหนดเสร็จ", render: t => fmtDate(t.due_date), filterValue: t => fmtDate(t.due_date) },
           { key: "priority", label: "ความสำคัญ", render: t => <PriorityChip priority={t.priority} />, filterValue: t => PRIORITY_LABEL[t.priority] || t.priority },
           { key: "status", label: "สถานะ", render: t => <TaskStatusChip status={t.status} /> },
           { key: "assigned_to", label: "ผู้ปฏิบัติงาน", render: t => memberName(members, t.assigned_to), filterValue: t => memberName(members, t.assigned_to) },
@@ -1269,11 +1294,11 @@ function OperationsView({ operations, dateRange, members, onOpenQuick, onEdit, o
         addLabel="บันทึกกิจกรรมใหม่"
         searchFn={(o, q) => (o.operation_type || "").toLowerCase().includes(q.toLowerCase())}
         columns={[
-          { key: "date", label: "วันที่", render: o => fmtDate(o.performed_at) },
+          { key: "date", label: "วันที่", render: o => fmtDate(o.performed_at), filterValue: o => fmtDate(o.performed_at) },
           { key: "type", label: "ประเภท", render: o => (
             <span className="chip" style={{ background: "var(--green-soft)", color: "var(--green)" }}>{o.operation_type}</span>
           ) },
-          { key: "tree", label: "ต้น/แปลง", render: o => o.trees?.tree_code || "ทั้งสวน" },
+          { key: "tree", label: "ต้น/แปลง", render: o => o.trees?.tree_code || "ทั้งสวน", filterValue: o => o.trees?.tree_code || "ทั้งสวน" },
           { key: "performed_by", label: "ผู้ปฏิบัติงาน", render: o => memberName(members, o.performed_by), filterValue: o => memberName(members, o.performed_by) },
           { filterable: false, key: "description", label: "หมายเหตุ" },
         ]}
@@ -1315,7 +1340,7 @@ function HarvestView({ harvest, dateRange, members, onOpenQuick, onEdit, onDelet
         addLabel="บันทึกผลผลิต"
         searchFn={(h, q) => (h.grade || "").toLowerCase().includes(q.toLowerCase())}
         columns={[
-          { key: "harvest_date", label: "วันที่ขาย", render: h => fmtDate(h.harvest_date) },
+          { key: "harvest_date", label: "วันที่ขาย", render: h => fmtDate(h.harvest_date), filterValue: h => fmtDate(h.harvest_date) },
           { filterable: false, key: "weight_kg", label: "น้ำหนัก (กก.)" },
           { key: "grade", label: "เกรด" },
           { filterable: false, key: "price_per_kg", label: "ราคา/กก.", render: h => h.price_per_kg ? `฿${Number(h.price_per_kg).toLocaleString()}` : "-" },
@@ -1344,7 +1369,7 @@ function FinanceView({ transactions, dateRange, members, onOpenQuick, onEdit, on
         addLabel="เพิ่มรายการ"
         searchFn={(t, q) => (t.category || "").toLowerCase().includes(q.toLowerCase())}
         columns={[
-          { key: "transaction_date", label: "วันที่", render: t => fmtDate(t.transaction_date) },
+          { key: "transaction_date", label: "วันที่", render: t => fmtDate(t.transaction_date), filterValue: t => fmtDate(t.transaction_date) },
           { key: "type", label: "ประเภท", render: t => (
             <span className="chip" style={{ background: t.transaction_type === "income" ? "var(--green-soft)" : "var(--red-soft)", color: t.transaction_type === "income" ? "var(--green)" : "var(--red)" }}>
               {t.transaction_type === "income" ? "รายรับ" : "รายจ่าย"}
@@ -1382,7 +1407,7 @@ function SoilView({ soil, dateRange, members, onOpenQuick, onEdit, onDelete }) {
         onDelete={onDelete}
         addLabel="บันทึกผล"
         columns={[
-          { key: "reading_date", label: "วันที่", render: s => fmtDate(s.reading_date) },
+          { key: "reading_date", label: "วันที่", render: s => fmtDate(s.reading_date), filterValue: s => fmtDate(s.reading_date) },
           { key: "ph", label: "pH" }, { key: "ec", label: "EC" }, { key: "om", label: "OM" },
           { key: "p", label: "P" }, { key: "k", label: "K" }, { key: "ca", label: "Ca" }, { key: "mg", label: "Mg" },
           { key: "notes", label: "หน่วยงาน" },
@@ -1933,7 +1958,7 @@ function AddFarmModal({ onClose, onCreated }) {
 }
 
 
-function QuickActionModal({ mode, editRecord, farmId, trees, members, currentUserId, onClose, onSaved }) {
+function QuickActionModal({ mode, editRecord, farmId, trees, members, currentUserId, myRole, onClose, onSaved }) {
   const isEdit = !!editRecord;
   const [form, setForm] = useState(mode || "menu");
   const [saving, setSaving] = useState(false);
@@ -2127,7 +2152,7 @@ function QuickActionModal({ mode, editRecord, farmId, trees, members, currentUse
                 { key: "harvest", label: "บันทึกผลผลิต", tone: "green" },
                 { key: "soil", label: "วิเคราะห์ดิน", tone: "blue" },
                 { key: "expense", label: "รายรับ-รายจ่าย", tone: "orange" },
-              ].map((o, i) => {
+              ].filter(o => o.key !== "expense" || myRole !== "worker").map((o, i) => {
                 const t = TONE[o.tone];
                 return (
                   <button key={i} onClick={() => setForm(o.key)} style={{ background: t.bg, border: "none", borderRadius: 12, padding: 16, fontSize: 13, fontWeight: 700, color: t.fg, cursor: "pointer" }}>
@@ -2399,9 +2424,11 @@ function DurianDashboardContent() {
         onDelete={canDeleteMost ? r => handleDelete(deleteHarvest, r, "ผลผลิต") : undefined} />;
       break;
     case "finance":
-      body = <FinanceView transactions={data.transactions} dateRange={dateRange} members={members} onOpenQuick={openAdd}
-        onEdit={canEditDelete ? r => openEdit("expense", r) : undefined}
-        onDelete={canDeleteMost ? r => handleDelete(deleteTransaction, r, "รายการ") : undefined} />;
+      body = myRole === "worker"
+        ? <div className="dsf-card"><div className="muted">คุณไม่มีสิทธิ์เข้าถึงข้อมูลการเงินของสวนนี้</div></div>
+        : <FinanceView transactions={data.transactions} dateRange={dateRange} members={members} onOpenQuick={openAdd}
+            onEdit={canEditDelete ? r => openEdit("expense", r) : undefined}
+            onDelete={canDeleteMost ? r => handleDelete(deleteTransaction, r, "รายการ") : undefined} />;
       break;
     case "soil":
       body = <SoilView soil={data.soil} dateRange={dateRange} members={members} onOpenQuick={openAdd}
@@ -2424,7 +2451,7 @@ function DurianDashboardContent() {
       <style>{TOKENS}</style>
       <div className="dsf-shell">
         <Sidebar page={page} onNavigate={navigate} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
-                 farms={farms} farmId={farmId} onFarmChange={setFarmId} onAddFarm={() => setAddFarmOpen(true)} userEmail={user?.email} />
+                 farms={farms} farmId={farmId} onFarmChange={setFarmId} onAddFarm={() => setAddFarmOpen(true)} userEmail={user?.email} myRole={myRole} />
         <div className="dsf-main">
           <Topbar
             onMenuClick={() => setSidebarOpen(o => !o)}
@@ -2466,6 +2493,7 @@ function DurianDashboardContent() {
           trees={data.trees}
           members={members}
           currentUserId={user?.id}
+          myRole={myRole}
           onClose={closeModal}
           onSaved={() => { closeModal(); data.refresh(); }}
         />

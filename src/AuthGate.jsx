@@ -128,7 +128,7 @@ function LoginScreen() {
         {mode === "signup" && (
           <Field label="ชื่อ-นามสกุล" value={fullName} onChange={setFullName} />
         )}
-        <Field label="อีเมล" value={email} onChange={setEmail} type="email" />
+        <Field label="อีเมล" value={email} onChange={setEmail} type="email" name="email" autoComplete="email" />
         <div style={{ marginBottom: 12 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: "#5C7A76", display: "block", marginBottom: 4 }}>รหัสผ่าน</label>
           <div style={{ position: "relative" }}>
@@ -137,12 +137,14 @@ function LoginScreen() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              style={{ width: "100%", background: "#FFF8E7", border: "1px solid #DCEEEC", borderRadius: 14, padding: "8px 36px 8px 10px", fontSize: 14 }}
+              name="current-password"
+              autoComplete="current-password"
+              style={{ width: "100%", boxSizing: "border-box", background: "#FFF8E7", border: "1px solid #DCEEEC", borderRadius: 14, padding: "8px 36px 8px 10px", fontSize: 14 }}
             />
             <button
               type="button"
               onClick={() => setShowPassword(s => !s)}
-              style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#5C7A76", padding: 4 }}
+              style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#5C7A76", padding: 4, display: "flex", lineHeight: 0 }}
               title={showPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"}
             >
               {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -168,7 +170,7 @@ function LoginScreen() {
   );
 }
 
-function Field({ label, value, onChange, type = "text" }) {
+function Field({ label, value, onChange, type = "text", name, autoComplete }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <label style={{ fontSize: 12, fontWeight: 600, color: "#5C7A76", display: "block", marginBottom: 4 }}>{label}</label>
@@ -177,7 +179,9 @@ function Field({ label, value, onChange, type = "text" }) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required
-        style={{ width: "100%", background: "#FFF8E7", border: "1px solid #DCEEEC", borderRadius: 14, padding: "8px 10px", fontSize: 14 }}
+        name={name}
+        autoComplete={autoComplete}
+        style={{ width: "100%", boxSizing: "border-box", background: "#FFF8E7", border: "1px solid #DCEEEC", borderRadius: 14, padding: "8px 10px", fontSize: 14 }}
       />
     </div>
   );
